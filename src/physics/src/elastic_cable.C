@@ -304,21 +304,14 @@ namespace GRINS
     const unsigned int dim = 1; // The cable dimension is always 1 for this physics
 
     for (unsigned int qp=0; qp != n_qpoints; qp++)
-      {
-        // Gradients are w.r.t. master element coordinates
-        libMesh::Gradient grad_u, grad_v, grad_w;
+      {    
+        libMesh::Real jac = JxW[qp];
+        libMesh::Gradient grad_u,grad_v,grad_w;
+        this->get_grad_uvw(context, qp, grad_u,grad_v,grad_w);
 
-        for( unsigned int d = 0; d < n_u_dofs; d++ )
-          {
-            libMesh::RealGradient u_gradphi( dphi_dxi[d][qp] );
-            grad_u += u_coeffs(d)*u_gradphi;
-
-            if( this->_disp_vars.dim() >= 2 )
-              grad_v += (*v_coeffs)(d)*u_gradphi;
-
-            if( this->_disp_vars.dim() == 3 )
-              grad_w += (*w_coeffs)(d)*u_gradphi;
-          }
+        libMesh::TensorValue<libMesh::Real> tau;
+        ElasticityTensor C;
+        this->get_stress_and_elasticity(context,qp,grad_u,grad_v,grad_w,tau,C);
 
         libMesh::RealGradient grad_x( dxdxi[qp](0) );
         libMesh::RealGradient grad_y( dxdxi[qp](1) );
@@ -333,12 +326,7 @@ namespace GRINS
                                       lambda_sq );
 
         // Compute stress tensor
-        libMesh::TensorValue<libMesh::Real> tau;
-        ElasticityTensor C;
         this->_stress_strain_law.compute_stress_and_elasticity(dim,a_contra,a_cov,A_contra,A_cov,tau,C);
-
-
-        libMesh::Real jac = JxW[qp];
 
         for (unsigned int i=0; i != n_u_dofs; i++)
           {

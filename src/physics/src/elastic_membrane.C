@@ -186,18 +186,13 @@ namespace GRINS
 
     for (unsigned int qp=0; qp != n_qpoints; qp++)
       {
-        // Gradients are w.r.t. master element coordinates
-        libMesh::Gradient grad_u, grad_v, grad_w;
+        libMesh::Gradient grad_u, grad_v,grad_w;
+        this->get_grad_uvw(context, qp, grad_u,grad_v,grad_w);
 
-        for( unsigned int d = 0; d < n_u_dofs; d++ )
-          {
-            libMesh::RealGradient u_gradphi( dphi_dxi[d][qp], dphi_deta[d][qp] );
-            grad_u += u_coeffs(d)*u_gradphi;
-            grad_v += v_coeffs(d)*u_gradphi;
-
-            if( this->_disp_vars.dim() == 3 )
-              grad_w += (*w_coeffs)(d)*u_gradphi;
-          }
+        // Compute stress and elasticity tensors
+        libMesh::TensorValue<libMesh::Real> tau;
+        ElasticityTensor C;
+        this->get_stress_and_elasticity(context,qp,grad_u,grad_v,grad_w,tau,C);
 
         libMesh::RealGradient grad_x( dxdxi[qp](0), dxdeta[qp](0) );
         libMesh::RealGradient grad_y( dxdxi[qp](1), dxdeta[qp](1) );
@@ -214,8 +209,7 @@ namespace GRINS
         const unsigned int manifold_dim = 2; // The manifold dimension is always 2 for this physics
 
         // Compute stress and elasticity tensors
-        libMesh::TensorValue<libMesh::Real> tau;
-        ElasticityTensor C;
+        
         this->_stress_strain_law.compute_stress_and_elasticity(manifold_dim,a_contra,a_cov,A_contra,A_cov,tau,C);
 
         libMesh::Real jac = JxW[qp];

@@ -27,6 +27,7 @@
 
 //GRINS
 #include "grins/elastic_membrane_base.h"
+#include "grins/elasticity_tensor.h"
 
 namespace GRINS
 {
@@ -64,6 +65,21 @@ namespace GRINS
                                                  const libMesh::Point& point,
                                                  libMesh::Real& value );
 
+    //! Precompute data needed for get_stress inline function
+    void get_grad_uvw(const AssemblyContext& context, unsigned int qp,
+                                   libMesh::Gradient &gradu,
+                                   libMesh::Gradient &gradv,
+                                   libMesh::Gradient &gradw);
+
+
+    //! Precompute stress and elasticity
+    void get_stress_and_elasticity(const AssemblyContext& context, unsigned int qp,
+                               const libMesh::Gradient &gradu,
+                               const libMesh::Gradient &gradv,
+                               const libMesh::Gradient &gradw,
+                               libMesh::TensorValue<libMesh::Real> & tau,
+                               ElasticityTensor & C );
+  
   private:
 
     ElasticMembrane();
@@ -76,8 +92,68 @@ namespace GRINS
 
     //! Index from registering this quantity for postprocessing. Each component will have it's own index.
     std::vector<unsigned int> _strain_indices;
+   
+  }; //end class ElasticMembrane
 
-  };
+
+
+  /* ------------- Inline Functions ---------------*/
+
+  template<typename StressStrainLaw> inline
+  void ElasticMembrane<StressStrainLaw>::get_grad_uvw(const AssemblyContext& context, unsigned int qp,
+                                                            libMesh::Gradient &gradu,
+                                                            libMesh::Gradient &gradv,
+                                                            libMesh::Gradient &gradw)
+  { 
+    const unsigned int n_u_dofs = context.get_dof_indices(this->_disp_vars.u()).size();
+    
+    // All shape function gradients are w.r.t. master element coordinates
+    const std::vector<std::vector<libMesh::Real> >& dphi_dxi = this->get_fe(context)->get_dphidxi();
+    const std::vector<std::vector<libMesh::Real> >& dphi_deta = this->get_fe(context)->get_dphideta();
+    
+    const libMesh::DenseSubVector<libMesh::Number>& u_coeffs = context.get_elem_solution( this->_disp_vars.u() );
+    const libMesh::DenseSubVector<libMesh::Number>& v_coeffs = context.get_elem_solution( this->_disp_vars.v() );
+    const libMesh::DenseSubVector<libMesh::Number>& w_coeffs = context.get_elem_solution( this->_disp_vars.w() );
+
+    // Compute gradients  w.r.t. master element coordinates
+    for( unsigned int d = 0; d < n_u_dofs; d++ )
+      {
+        libMesh::RealGradient u_gradphi( dphi_dxi[d][qp], dphi_deta[d][qp] );
+        gradu += u_coeffs(d)*u_gradphi;
+        gradv += v_coeffs(d)*u_gradphi;
+        gradw += w_coeffs(d)*u_gradphi;
+      }
+  }
+
+  template<typename StressStrainLaw> inline
+  void ElasticMembrane<StressStrainLaw>::get_stress_and_elasticity(const AssemblyContext& context, unsigned int qp,
+                                                        const libMesh::Gradient &gradu,
+                                                        const libMesh::Gradient &gradv,
+                                                        const libMesh::Gradient &gradw,
+                                                        libMesh::TensorValue<libMesh::Real> & tau,
+                                                        ElasticityTensor & C)
+  {
+    // Need these to build up the covariant and contravariant metric tensors
+    const std::vector<libMesh::RealGradient>& dxdxi  = this->get_fe(context)->get_dxyzdxi();
+
+    const unsigned int dim = 2; // The membrane dimension is always 2 for this physics
+
+    // Compute & store gradients  w.r.t. actual element coordinates
+    libMesh::RealGradient grad_x( dxdxi[qp](0) );
+    libMesh::RealGradient grad_y( dxdxi[qp](1) );
+    libMesh::RealGradient grad_z( dxdxi[qp](2) );
+    
+    libMesh::TensorValue<libMesh::Real> a_cov, a_contra, A_cov, A_contra;
+    libMesh::Real lambda_sq = 0;
+    
+    this->compute_metric_tensors( qp, *(this->get_fe(context)), context,
+                                  gradu, gradv, gradw,
+                                  a_cov, a_contra, A_cov, A_contra,
+                                  lambda_sq );
+
+    // Compute stress tensor
+    this->_stress_strain_law.compute_stress_and_elasticity(dim,a_contra,a_cov,A_contra,A_cov,tau,C);
+  }
 
 } // end namespace GRINS
 
