@@ -124,10 +124,10 @@ namespace GRINS
     //! Residual contributions to the solid
     void element_time_derivative_solid(AssemblyContext& context);
 
-    void assemble_fluid_var_residual_contributions( bool compute_jacobian,
+    void assemble_u_var_residual_contributions( bool compute_jacobian,
                                                     AssemblyContext & context );
 
-    void assemble_solid_var_residual_contributions( bool compute_jacobian,
+    void assemble_u_dot_var_residual_contributions( bool compute_jacobian,
                                                     AssemblyContext & context );
 
     bool is_solid_elem( libMesh::subdomain_id_type elem_id );
