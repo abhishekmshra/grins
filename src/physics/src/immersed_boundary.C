@@ -108,21 +108,10 @@ namespace GRINS
   {
     // Get the point locator object that will find the right fluid element
     _point_locator = system.get_mesh().sub_point_locator();
-
-    // Build helper FEMContexts. We'll use this to handle
-    // supplemental finite element data for variables that
-    // we need, but are not defined on the "current" subdomain.
-    {
-      libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
-      libMesh::FEMContext * context = libMesh::cast_ptr<libMesh::FEMContext *>(raw_context.release());
-      _solid_context.reset(context);
-    }
-
-    {
-      libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
-      libMesh::FEMContext * context = libMesh::cast_ptr<libMesh::FEMContext *>(raw_context.release());
-      _fluid_context.reset(context);
-    }
+  
+    libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
+    libMesh::FEMContext * context = libMesh::cast_ptr<libMesh::FEMContext *>(raw_context.release());
+    fluid_context.reset(context);
   }
 
   template<typename SolidMech>
@@ -248,22 +237,73 @@ namespace GRINS
   void ImmersedBoundary<SolidMech>::element_time_derivative( bool compute_jacobian,
                                                              AssemblyContext & context )
   {
-    if( this->is_fluid_elem( context.get_elem().subdomain_id() ) )
-      this->assemble_fluid_var_residual_contributions(compute_jacobian,context);
-
     if( this->is_solid_elem( context.get_elem().subdomain_id() ) )
       this->assemble_solid_var_residual_contributions(compute_jacobian,context);
   }
   
   template<typename SolidMech>
-  void ImmersedBoundary<SolidMech>::assemble_fluid_var_residual_contributions( bool compute_jacobian,
+  void ImmersedBoundary<SolidMech>::assemble_solid_var_residual_contributions( bool compute_jacobian,
                                                                                AssemblyContext & context )
   {
     // For clarity
-    AssemblyContext & fluid_context = context;
+    AssemblyContext & solid_context = context;
+
+    MultiphysicsSystem & system = context.get_multiphysics_system();
+
+    unsigned int us_var = this->_disp_vars.u();
+
+    const unsigned int n_solid_dofs = solid_context.get_dof_indices(us_var).size();
+
+    // Global coordinates of the solid qp points
+    const std::vector<libMesh::Point> & solid_qpoints =
+      solid_context.get_element_fe(us_var,2)->get_xyz();
+
+    const std::vector<libMesh::Real> & solid_JxW =
+      solid_context.get_element_fe(us_var,2)->get_JxW();
+
+    const std::vector<std::vector<libMesh::Real> > & solid_phi =
+      solid_context.get_element_fe(us_var,2)->get_phi();
+
+    const std::vector<std::vector<libMesh::RealGradient> > & solid_dphi =
+      solid_context.get_element_fe(us_var,2)->get_dphi();
+
+    const std::vector<std::vector<libMesh::RealGradient> > & fluid_dphi =
+      fluid_context->get_element_fe(this->_flow_vars.u())->get_dphi();
+
+    std::vector<libMesh::Point> solid_qpoints_subset;
 
     std::map<libMesh::dof_id_type,std::map<libMesh::dof_id_type,std::vector<unsigned int> > >::const_iterator
-      fluid_elem_map_it = _fluid_solid_overlap->fluid_map().find(fluid_context.get_elem().id());
+      solid_elem_map_it = _fluid_solid_overlap->solid_map().find(solid_context.get_elem().id());
+
+    // We should've had at least one overlapping fluid element
+    libmesh_assert( solid_elem_map_it != _fluid_solid_overlap->solid_map().end() );
+
+    const std::map<libMesh::dof_id_type,std::vector<unsigned int> > &
+      fluid_elem_map = solid_elem_map_it->second;
+
+    for( std::map<libMesh::dof_id_type,std::vector<unsigned int> >::const_iterator
+           fluid_elem_map_it = fluid_elem_map.begin();
+         fluid_elem_map_it != fluid_elem_map.end();
+         ++fluid_elem_map_it )
+      {
+        libMesh::dof_id_type fluid_elem_id = fluid_elem_map_it->first;
+        const libMesh::Elem* fluid_elem = system.get_mesh().elem(fluid_elem_id);
+
+        const std::vector<unsigned int> & solid_qpoint_indices = fluid_elem_map_it->second;
+
+        solid_qpoints_subset.clear();
+        solid_qpoints_subset.reserve(solid_qpoint_indices.size());
+        for( unsigned int i = 0; i < solid_qpoint_indices.size(); i++ )
+          solid_qpoints_subset.push_back( (solid_context.get_element_fe(_disp_vars.u(),2)->get_xyz())[ solid_qpoint_indices[i] ]);
+      
+        fluid_context->pre_fe_reinit(system,fluid_elem);
+        fluid_context->elem_fe_reinit(&solid_qpoints_subset);
+      }
+
+   unsigned int n_fluid_dofs = fluid_context->get_dof_indices(this->_flow_vars.u()).size();
+
+   std::map<libMesh::dof_id_type,std::map<libMesh::dof_id_type,std::vector<unsigned int> > >::const_iterator
+      fluid_elem_map_it = _fluid_solid_overlap->fluid_map().find(fluid_context->get_elem().id());
 
     // Check if this fluid element had any solid elements overlapping
     if( fluid_elem_map_it != _fluid_solid_overlap->fluid_map().end() )
@@ -279,144 +319,121 @@ namespace GRINS
                solid_elem_map_it = solid_elem_map.begin();
              solid_elem_map_it != solid_elem_map.end();
              ++solid_elem_map_it )
+        {
+        // Prepare and reinit helper solid FEMContext for the solid element.
+        libMesh::dof_id_type solid_elem_id = solid_elem_map_it->first;
+        const libMesh::Elem* solid_elem = system.get_mesh().elem(solid_elem_id);
+
+        const std::vector<unsigned int> & solid_qp_indices = solid_elem_map_it->second;
+
+        // Extract the subset of solid quadrature points that overlap with
+        // this fluid element
+        std::vector<libMesh::Point> solid_qpoints(solid_qp_indices.size());
+        for( unsigned int qp = 0; qp < solid_qp_indices.size(); qp++ )
+          solid_qpoints[qp] = solid_qpoints[ solid_qp_indices[qp] ];
+
+        // Now construct a fluid finite element using the
+        // solid element quadrature points and
+        libMesh::FEType fluid_fe_type = fluid_context->get_element_fe(_flow_vars.u())->get_fe_type();
+
+        const libMesh::Elem & fluid_elem = fluid_context->get_elem();
+
+        libMesh::UniquePtr<libMesh::FEGenericBase<libMesh::Real> > fluid_fe =
+          libMesh::FEGenericBase<libMesh::Real>::build(2,fluid_fe_type);
+
+        const std::vector<std::vector<libMesh::Real> > & fluid_phi = fluid_fe->get_phi();
+
+        fluid_fe->reinit(&fluid_elem,&solid_qpoints);
+
+        unsigned int u_dot_var = system.get_second_order_dot_var(us_var);
+
+        // Now assemble fluid part of velocity matching term
+        // into solid residual.
+        libMesh::DenseSubVector<libMesh::Number> & Fus =
+          solid_context.get_elem_residual(us_var);
+
+        libMesh::DenseSubVector<libMesh::Number> * Fvs = NULL;
+        libMesh::DenseSubVector<libMesh::Number> * Fws = NULL;
+
+        unsigned int vs_var = libMesh::invalid_uint;
+        unsigned int v_dot_var = libMesh::invalid_uint;
+        if ( this->_disp_vars.dim() >= 2 )
           {
-            libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
-            AssemblyContext & solid_context = libMesh::cast_ref<AssemblyContext &>(*raw_context.get());
+            vs_var = this->_disp_vars.v();
+            v_dot_var = system.get_second_order_dot_var(vs_var);
+            Fvs = &solid_context.get_elem_residual(vs_var);
+          }
 
-            // Prepare and reinit helper solid FEMContext for the solid element.
-            libMesh::dof_id_type solid_elem_id = solid_elem_map_it->first;
-            const libMesh::Elem* solid_elem = system.get_mesh().elem(solid_elem_id);
+        unsigned int ws_var = libMesh::invalid_uint;
+        unsigned int w_dot_var = libMesh::invalid_uint;
+        if ( this->_disp_vars.dim() == 3 )
+          {
+            ws_var = this->_disp_vars.w();
+            w_dot_var = system.get_second_order_dot_var(ws_var);
+            Fws = &solid_context.get_elem_residual(ws_var);
+          }
 
-            const std::vector<unsigned int> & solid_qp_indices = solid_elem_map_it->second;
+       // Build up solid dof indices
+       unsigned int sshift = 1;
+       if( us_var != u_dot_var )
+         sshift = 2;
 
-            unsigned int us_var = this->_disp_vars.u();
+       std::vector<libMesh::dof_id_type> solid_dof_indices;
 
-            const std::vector<libMesh::Point>& all_solid_qpoints =
-              solid_context.get_element_fe(us_var,2)->get_xyz();
+       solid_dof_indices.clear();
+       solid_dof_indices.resize(_disp_vars.dim()*sshift*n_solid_dofs);
 
-            const std::vector<std::vector<libMesh::Real> > & solid_phi =
-              solid_context.get_element_fe(us_var,2)->get_phi();
+       std::vector<libMesh::dof_id_type>::iterator sdof_start = solid_dof_indices.begin();
+       const std::vector<libMesh::dof_id_type>& us_dof_indices =
+         solid_context.get_dof_indices(us_var);
 
-             const std::vector<libMesh::Real> & solid_JxW =
-               solid_context.get_element_fe(us_var,2)->get_JxW();
+       for( unsigned int i = 0; i < us_dof_indices.size(); i++ )
+         solid_dof_indices[i] = us_dof_indices[i];
 
-            solid_context.pre_fe_reinit(system,solid_elem);
-            solid_context.elem_fe_reinit();
+       const std::vector<libMesh::dof_id_type>& vs_dof_indices =
+         solid_context.get_dof_indices(vs_var);
 
-            const unsigned int n_solid_dofs =
-              solid_context.get_dof_indices(us_var).size();
+       for( unsigned int i = 0; i < vs_dof_indices.size(); i++ )
+         solid_dof_indices[i+n_solid_dofs] = vs_dof_indices[i];
 
-            // Extract the subset of solid quadrature points that overlap with
-            // this fluid element
-            std::vector<libMesh::Point> solid_qpoints(solid_qp_indices.size());
-            for( unsigned int qp = 0; qp < solid_qp_indices.size(); qp++ )
-              solid_qpoints[qp] = all_solid_qpoints[ solid_qp_indices[qp] ];
+       if( us_var != u_dot_var )
+         {
+            const std::vector<libMesh::dof_id_type>& udot_dof_indices =
+              solid_context.get_dof_indices(u_dot_var);
 
-            // Now construct a fluid finite element using the
-            // solid element quadrature points and
-            libMesh::FEType fluid_fe_type = fluid_context.get_element_fe(_flow_vars.u())->get_fe_type();
+            for( unsigned int i = 0; i < udot_dof_indices.size(); i++ )
+              solid_dof_indices[i+2*n_solid_dofs] = udot_dof_indices[i];
 
-            const libMesh::Elem & fluid_elem = fluid_context.get_elem();
+            const std::vector<libMesh::dof_id_type>& vdot_dof_indices =
+              solid_context.get_dof_indices(v_dot_var);
 
-            libMesh::UniquePtr<libMesh::FEGenericBase<libMesh::Real> > fluid_fe =
-              libMesh::FEGenericBase<libMesh::Real>::build(2,fluid_fe_type);
+            for( unsigned int i = 0; i < vdot_dof_indices.size(); i++ )
+              solid_dof_indices[i+3*n_solid_dofs] = vdot_dof_indices[i];
 
-            const std::vector<std::vector<libMesh::Real> > & fluid_phi = fluid_fe->get_phi();
+          }
 
-            fluid_fe->reinit(&fluid_elem,&solid_qpoints);
+       
+       velocity_dof_indices.clear();
+       velocity_dof_indices.resize(_flow_vars.dim()*n_fluid_dofs);
 
-            unsigned int u_dot_var = system.get_second_order_dot_var(us_var);
+       std::vector<libMesh::dof_id_type>::iterator vdof_start = velocity_dof_indices.begin();
+       const std::vector<libMesh::dof_id_type>& u_dof_indices =
+         fluid_context->get_dof_indices(this->_flow_vars.u());
 
-            // Now assemble fluid part of velocity matching term
-            // into solid residual.
-            libMesh::DenseSubVector<libMesh::Number> & Fus =
-              solid_context.get_elem_residual(u_dot_var);
+       for( unsigned int i = 0; i < u_dof_indices.size(); i++ )
+         velocity_dof_indices[i] = u_dof_indices[i];
 
-            libMesh::DenseSubVector<libMesh::Number> * Fvs = NULL;
-            libMesh::DenseSubVector<libMesh::Number> * Fws = NULL;
+       const std::vector<libMesh::dof_id_type>& v_dof_indices =
+         fluid_context->get_dof_indices(this->_flow_vars.v());
 
-            unsigned int v_var = libMesh::invalid_uint;
-            unsigned int v_dot_var = libMesh::invalid_uint;
-            if ( this->_disp_vars.dim() >= 2 )
-              {
-                v_var = this->_disp_vars.v();
-                v_dot_var = system.get_second_order_dot_var(v_var);
-
-                Fvs = &solid_context.get_elem_residual(v_dot_var);
-              }
-
-            unsigned int w_var = libMesh::invalid_uint;
-            unsigned int w_dot_var = libMesh::invalid_uint;
-            if ( this->_disp_vars.dim() == 3 )
-              {
-                w_var = this->_disp_vars.w();
-                w_dot_var = system.get_second_order_dot_var(w_var);
-
-                Fws = &solid_context.get_elem_residual(w_dot_var);
-              }
-
-            // Build up solid dof indices
-            unsigned int sshift = 1;
-            if( us_var != u_dot_var )
-              sshift = 2;
-
-            std::vector<libMesh::dof_id_type> solid_dof_indices;
-
-            solid_dof_indices.clear();
-            solid_dof_indices.resize(_disp_vars.dim()*sshift*n_solid_dofs);
-
-            std::vector<libMesh::dof_id_type>::iterator sdof_start = solid_dof_indices.begin();
-            const std::vector<libMesh::dof_id_type>& us_dof_indices =
-              solid_context.get_dof_indices(us_var);
-     
-            for( unsigned int i = 0; i < us_dof_indices.size(); i++ )
-              solid_dof_indices[i] = us_dof_indices[i];
-      
-            const std::vector<libMesh::dof_id_type>& vs_dof_indices =
-              solid_context.get_dof_indices(v_var);
-    
-            for( unsigned int i = 0; i < vs_dof_indices.size(); i++ )
-              solid_dof_indices[i+n_solid_dofs] = vs_dof_indices[i];            
+       for( unsigned int i = 0; i < v_dof_indices.size(); i++ )
+         velocity_dof_indices[i+n_fluid_dofs] = v_dof_indices[i];
 
 
-            if( us_var != u_dot_var )
-              {
-                const std::vector<libMesh::dof_id_type>& udot_dof_indices =
-                  solid_context.get_dof_indices(u_dot_var);
-     
-                for( unsigned int i = 0; i < udot_dof_indices.size(); i++ )
-                  solid_dof_indices[i+2*n_solid_dofs] = udot_dof_indices[i];
-      
-                const std::vector<libMesh::dof_id_type>& vdot_dof_indices =
-                  solid_context.get_dof_indices(v_dot_var);
-     
-                for( unsigned int i = 0; i < vdot_dof_indices.size(); i++ )
-                  solid_dof_indices[i+3*n_solid_dofs] = vdot_dof_indices[i];
-   
-              }
+       libMesh::DenseMatrix<libMesh::Number> K;
+       libMesh::DenseSubMatrix<libMesh::Number> Kus_uf(K), Kvs_vf(K), Kws_wf(K);
 
-            unsigned int n_fluid_dofs = fluid_context.get_dof_indices(this->_flow_vars.u()).size();
-
-            velocity_dof_indices.clear();
-            velocity_dof_indices.resize(_flow_vars.dim()*n_fluid_dofs);
-
-            std::vector<libMesh::dof_id_type>::iterator vdof_start = velocity_dof_indices.begin();
-            const std::vector<libMesh::dof_id_type>& u_dof_indices =
-              fluid_context.get_dof_indices(this->_flow_vars.u());
-
-            for( unsigned int i = 0; i < u_dof_indices.size(); i++ )
-              velocity_dof_indices[i] = u_dof_indices[i];
-
-            const std::vector<libMesh::dof_id_type>& v_dof_indices =
-              fluid_context.get_dof_indices(this->_flow_vars.v());
-
-            for( unsigned int i = 0; i < v_dof_indices.size(); i++ )
-              velocity_dof_indices[i+n_fluid_dofs] = v_dof_indices[i];
-
-            libMesh::DenseMatrix<libMesh::Number> K;
-            libMesh::DenseSubMatrix<libMesh::Number> Kus_uf(K), Kvs_vf(K), Kws_wf(K);
-
-            if( compute_jacobian)
+       if( compute_jacobian)
               {
                 K.resize( this->_disp_vars.dim()*sshift*n_solid_dofs, this->_flow_vars.dim()*n_fluid_dofs );
 
@@ -442,157 +459,112 @@ namespace GRINS
                   }
               }
 
-            unsigned int n_qpoints = solid_qpoints.size();
+       unsigned int n_qpoints = solid_qpoints.size();
 
-            for( unsigned int qp = 0; qp < n_qpoints; qp++ )
-              {
-                libMesh::Real Vx = 0.0;
-                libMesh::Real Vy = 0.0;
-                libMesh::Real Vz = 0.0;
+       for( unsigned int qp = 0; qp < n_qpoints; qp++ )
+       {
+         libMesh::Real Vx = 0.0;
+         libMesh::Real Vy = 0.0;
+         libMesh::Real Vz = 0.0;
 
-                // Compute the fluid velocity at the solid element quadrature points.
-                // The fluid solution dofs come from the incoming context. This way,
-                // we can still have correct numerical Jacobians.
-                for( unsigned int i = 0; i < n_fluid_dofs; i++ )
-                  {
-                    Vx += fluid_phi[i][qp]*(fluid_context.get_elem_solution(this->_flow_vars.u()))(i);
-                    Vy += fluid_phi[i][qp]*(fluid_context.get_elem_solution(this->_flow_vars.v()))(i);
+       // Compute the fluid velocity at the solid element quadrature points.
+       // The fluid solution dofs come from the incoming context. This way,
+       // we can still have correct numerical Jacobians.
+       for( unsigned int i = 0; i < n_fluid_dofs; i++ )
+         {
+           Vx += fluid_phi[i][qp]*(fluid_context->get_elem_solution(this->_flow_vars.u()))(i);
+           Vy += fluid_phi[i][qp]*(fluid_context->get_elem_solution(this->_flow_vars.v()))(i);
 
-                    if ( this->_disp_vars.dim() == 3 )
-                      Vz += fluid_phi[i][qp]*(fluid_context.get_elem_solution(this->_flow_vars.w()))(i);
-                  }
+           if ( this->_disp_vars.dim() == 3 )
+             Vz += fluid_phi[i][qp]*(fluid_context->get_elem_solution(this->_flow_vars.w()))(i);
+         }
+ 
+       // We're working with a subset of the solid quadrature points
+       // so grab the index to the current one
+       unsigned int solid_qp_idx = solid_qp_indices[qp];
 
-                // We're working with a subset of the solid quadrature points
-                // so grab the index to the current one
-                unsigned int solid_qp_idx = solid_qp_indices[qp];
+       libMesh::Real jac = solid_JxW[solid_qp_idx];
 
-                libMesh::Real jac = solid_JxW[solid_qp_idx];
+       for( unsigned int i = 0; i < n_solid_dofs; i++ )
+         {
+           Fus(i) += Vx*solid_phi[i][solid_qp_idx]*jac;
 
-                for( unsigned int i = 0; i < n_solid_dofs; i++ )
-                  {
-                 //  ! \todo [PB]: For manifolds, I don't think these are the correct shape
-                 //                   functions because there are missing terms. 
-                    Fus(i) += Vx*solid_phi[i][solid_qp_idx]*jac;
+           if ( this->_disp_vars.dim() >= 2 )
+             (*Fvs)(i) += Vy*solid_phi[i][solid_qp_idx]*jac;
 
-                    if ( this->_disp_vars.dim() >= 2 )
-                      (*Fvs)(i) += Vy*solid_phi[i][solid_qp_idx]*jac;
+           if ( this->_disp_vars.dim() ==3 )
+             (*Fws)(i) += Vz*solid_phi[i][solid_qp_idx]*jac;
 
-                    if ( this->_disp_vars.dim() ==3 )
-                      (*Fws)(i) += Vz*solid_phi[i][solid_qp_idx]*jac;
+           if ( compute_jacobian )
+             {
+               for( unsigned int j = 0; j < n_fluid_dofs; j++ )
+                 {
+                   libMesh::Real diag_value =
+                     fluid_phi[j][qp]*solid_phi[i][solid_qp_idx]*jac*
+                     fluid_context->get_elem_solution_derivative();
 
-                    if( compute_jacobian )
-                      {
-                        for( unsigned int j = 0; j < n_fluid_dofs; j++ )
-                          {
-                            libMesh::Real diag_value =
-                              fluid_phi[j][qp]*solid_phi[i][solid_qp_idx]*jac*
-                              fluid_context.get_elem_solution_derivative();
+                   Kus_uf(i,j) += diag_value;
 
-                            Kus_uf(i,j) += diag_value;
-                            if ( this->_disp_vars.dim() >= 2 )
-                              Kvs_vf(i,j) += diag_value;
+                   if ( this->_disp_vars.dim() >= 2 )
+                     Kvs_vf(i,j) += diag_value;
+  
+                   if ( this->_disp_vars.dim() == 3 )
+                     Kws_wf(i,j) += diag_value;
+                 }
+             }
+          }
+       } // end loop over active solid quadrature points
 
-                            if ( this->_disp_vars.dim() == 3 )
-                              Kws_wf(i,j) += diag_value;
-                          }
-                      }
-                  }
+       if( compute_jacobian )
+         {
+           system.get_dof_map().constrain_element_matrix
+             ( K,
+                solid_dof_indices,
+                velocity_dof_indices,
+                false );
 
-              } // end loop over active solid quadrature points
+           system.matrix->add_matrix( K,
+                                      solid_dof_indices,
+                                      velocity_dof_indices );
+         }
 
+        system.get_dof_map().constrain_element_vector
+          ( solid_context.get_elem_residual(),
+            solid_dof_indices,
+            false );
 
-            // Since we manually build the solid context, we have to manually
-            // constrain and add the residuals and Jacobians.
-         //! \todo  We're hardcoding to the case that the residual is always
-          //    assembled and homogeneous constraints. 
-            if( compute_jacobian )
-              {
-                system.get_dof_map().constrain_element_matrix
-                  ( K,
-                    solid_dof_indices,
-                    velocity_dof_indices,
-                    false );
+        system.rhs->add_vector( solid_context.get_elem_residual(),
+                                solid_dof_indices );
 
-                system.matrix->add_matrix( K,
-                                           solid_dof_indices,
-                                           velocity_dof_indices );
-              }
-
-            system.get_dof_map().constrain_element_vector
-                  ( solid_context.get_elem_residual(),
-                    solid_dof_indices,
-                    false );
-
-            system.rhs->add_vector( solid_context.get_elem_residual(),
-                                    solid_dof_indices );
-
-        } // end loop over solid elem map
-      } // end if fluid element has overlapping solid elem
-  }
-
-  template<typename SolidMech>
-  void ImmersedBoundary<SolidMech>::assemble_solid_var_residual_contributions( bool compute_jacobian,
-                                                                               AssemblyContext & context )
-  {
-    // For clarity
-    AssemblyContext & solid_context = context;
-
-    MultiphysicsSystem & system = context.get_multiphysics_system();
-
-    unsigned int u_var = this->_disp_vars.u();
-
-    const unsigned int n_solid_dofs = solid_context.get_dof_indices(u_var).size();
-
-    std::cout << "n_solid_dofs = " << n_solid_dofs << std::endl;
-
-    // Global coordinates of the solid qp points
-    const std::vector<libMesh::Point> & solid_qpoints =
-      solid_context.get_element_fe(u_var,2)->get_xyz();
-
-    const std::vector<libMesh::Real> & solid_JxW =
-      solid_context.get_element_fe(u_var,2)->get_JxW();
-
-    const std::vector<std::vector<libMesh::Real> > & solid_phi =
-      solid_context.get_element_fe(u_var,2)->get_phi();
-
-    const std::vector<std::vector<libMesh::RealGradient> > & solid_dphi =
-      solid_context.get_element_fe(u_var,2)->get_dphi();
-
-    const std::vector<std::vector<libMesh::RealGradient> > & fluid_dphi =
-      _fluid_context->get_element_fe(this->_flow_vars.u())->get_dphi();
-
-    unsigned int u_dot_var = system.get_second_order_dot_var(u_var);
+      } // end loop over solid elem map
+    } // end if fluid element has overlapping solid elem
 
     // Solid residuals
-    libMesh::DenseSubVector<libMesh::Number> & Fus = solid_context.get_elem_residual(u_dot_var);
+    libMesh::DenseSubVector<libMesh::Number> & Fus = solid_context.get_elem_residual(us_var);
     libMesh::DenseSubVector<libMesh::Number> * Fvs = NULL;
     libMesh::DenseSubVector<libMesh::Number> * Fws = NULL;
 
     // Solid Jacobians
-    libMesh::DenseSubMatrix<libMesh::Number> & Kus_us = solid_context.get_elem_jacobian(u_dot_var,u_dot_var);
+    libMesh::DenseSubMatrix<libMesh::Number> & Kus_us = solid_context.get_elem_jacobian(us_var,us_var);
     libMesh::DenseSubMatrix<libMesh::Number> * Kvs_vs = NULL;
     libMesh::DenseSubMatrix<libMesh::Number> * Kws_ws = NULL;
 
-    unsigned int v_var = libMesh::invalid_uint;
-    unsigned int v_dot_var = libMesh::invalid_uint;
+    unsigned int vs_var = libMesh::invalid_uint;
     if ( this->_disp_vars.dim() >= 2 )
       {
-        v_var = this->_disp_vars.v();
-        v_dot_var = system.get_second_order_dot_var(v_var);
-
-        Fvs = &solid_context.get_elem_residual(v_dot_var);
-        Kvs_vs = &solid_context.get_elem_jacobian(v_dot_var,v_dot_var);
+        vs_var = this->_disp_vars.v();
+        
+        Fvs = &solid_context.get_elem_residual(vs_var);
+        Kvs_vs = &solid_context.get_elem_jacobian(vs_var,vs_var);
       }
 
-    unsigned int w_var = libMesh::invalid_uint;
-    unsigned int w_dot_var = libMesh::invalid_uint;
+    unsigned int ws_var = libMesh::invalid_uint;
     if ( this->_disp_vars.dim() == 3 )
       {
-        w_var = this->_disp_vars.w();
-        w_dot_var = system.get_second_order_dot_var(w_var);
-
-        Fws = &solid_context.get_elem_residual(w_var);
-        Kws_ws = &solid_context.get_elem_jacobian(w_dot_var,w_dot_var);
+        ws_var = this->_disp_vars.w();
+        
+        Fws = &solid_context.get_elem_residual(ws_var);
+        Kws_ws = &solid_context.get_elem_jacobian(ws_var,ws_var);
       }
 
     const unsigned int n_qpoints = solid_context.get_element_qrule().n_points();
@@ -652,6 +624,110 @@ namespace GRINS
           } // end dof loop
       } // end qp loop
 
+    unsigned int u_dot_var = system.get_second_order_dot_var(us_var);
+
+    libMesh::DenseSubVector<libMesh::Number> & Fud = solid_context.get_elem_residual(u_dot_var);
+    libMesh::DenseSubVector<libMesh::Number> * Fvd = NULL;
+    libMesh::DenseSubVector<libMesh::Number> * Fwd = NULL;
+
+    libMesh::DenseSubMatrix<libMesh::Number> & Kud_us = solid_context.get_elem_jacobian(u_dot_var,us_var);
+    libMesh::DenseSubMatrix<libMesh::Number> * Kvd_vs = NULL;
+    libMesh::DenseSubMatrix<libMesh::Number> * Kwd_ws = NULL;
+
+    libMesh::DenseSubMatrix<libMesh::Number> & Kud_ud = solid_context.get_elem_jacobian(u_dot_var,u_dot_var);
+    libMesh::DenseSubMatrix<libMesh::Number> * Kvd_vd = NULL;
+    libMesh::DenseSubMatrix<libMesh::Number> * Kwd_wd = NULL;
+
+    unsigned int v_dot_var = libMesh::invalid_uint;
+    if ( this->_disp_vars.dim() >= 2 )
+      {
+        v_dot_var = system.get_second_order_dot_var(vs_var);
+
+        Fvd = &solid_context.get_elem_residual(v_dot_var);
+        Kvd_vs = &solid_context.get_elem_jacobian(v_dot_var,vs_var);
+        Kvd_vd = &solid_context.get_elem_jacobian(v_dot_var,v_dot_var);
+      }
+
+    unsigned int w_dot_var = libMesh::invalid_uint;
+    if ( this->_disp_vars.dim() == 3 )
+      {
+        w_dot_var = system.get_second_order_dot_var(ws_var);
+
+        Fwd = &solid_context.get_elem_residual(w_dot_var);
+        Kwd_ws = &solid_context.get_elem_jacobian(w_dot_var,ws_var);
+        Kwd_wd = &solid_context.get_elem_jacobian(w_dot_var,w_dot_var);
+      }
+    libMesh::Point U_double_dot;
+    libMesh::Point W_dot;
+    libMesh::Real solution_accel_derivative = 1.0;
+    solution_rate_derivative = 1.0;
+
+    if( !system.get_time_solver().is_steady() )
+    {
+      solution_rate_derivative = solid_context.get_elem_solution_rate_derivative();
+      solution_accel_derivative = solid_context.get_elem_solution_accel_derivative();
+    }
+
+    for(unsigned int qp=0; qp != n_qpoints; qp++)
+      {
+        if( !system.get_time_solver().is_steady() )
+          {
+            solid_context.interior_rate(u_dot_var, qp, W_dot(0));
+            solid_context.interior_accel(us_var, qp, U_double_dot(0));
+
+            if ( this->_disp_vars.dim() >= 2 )
+              {               
+                solid_context.interior_rate(v_dot_var, qp, W_dot(1));
+                solid_context.interior_accel(vs_var, qp, U_double_dot(1));
+              }
+            if ( this->_disp_vars.dim() == 3 )
+              {         
+                solid_context.interior_rate(w_dot_var, qp, W_dot(2));
+                solid_context.interior_accel(ws_var, qp, U_double_dot(2));
+              }
+          }
+
+        for( unsigned int i = 0; i < n_solid_dofs; i++ )
+          {
+            Fud(i) += (U_double_dot(0)-W_dot(0))*solid_phi[i][qp]*solid_JxW[qp];
+
+            if ( this->_disp_vars.dim() >= 2 )
+              (*Fvd)(i) += (U_double_dot(1)-W_dot(1))*solid_phi[i][qp]*solid_JxW[qp];              
+
+            if( this->_disp_vars.dim() == 3 )
+              (*Fwd)(i) += (U_double_dot(2)-W_dot(2))*solid_phi[i][qp]*solid_JxW[qp];
+
+
+            if(compute_jacobian)
+              {
+                for( unsigned int j = 0; j < n_solid_dofs; j++ )
+                  {
+                    libMesh::Real rate_factor =
+                      solid_phi[j][qp]*solid_phi[i][qp]*solid_JxW[qp]*solution_rate_derivative;
+                    libMesh::Real accel_factor =
+                      solid_phi[j][qp]*solid_phi[i][qp]*solid_JxW[qp]*solution_accel_derivative;
+
+                    Kud_us(i,j) += accel_factor;
+                    Kud_ud(i,j) -= rate_factor;
+
+                    if ( this->_disp_vars.dim() >= 2 )
+                      {
+                        (*Kvd_vs)(i,j) += accel_factor;
+                        (*Kvd_vd)(i,j) -= rate_factor;
+                      }
+
+                    if ( this->_disp_vars.dim() == 3 )
+                      {
+                        (*Kwd_ws)(i,j) += accel_factor;
+                        (*Kwd_wd)(i,j) -= rate_factor;
+                      }
+
+                  }
+              }
+          } // end dof loop
+      } // end qp loop
+
+
     libMesh::DenseMatrix<libMesh::Number> Kmat;
 
     libMesh::DenseSubMatrix<libMesh::Number> Kuf_us(Kmat), Kuf_vs(Kmat), Kuf_ws(Kmat);
@@ -660,20 +736,20 @@ namespace GRINS
 
     std::vector<libMesh::dof_id_type> velocity_dof_indices;
 
-    std::vector<libMesh::Point> solid_qpoints_subset;
+//    std::vector<libMesh::Point> solid_qpoints_subset;
 
     // Now we assemble the force coupling part
     // We need to grab the fluid elements that are overlapping with this solid elem.
     // Then, for that fluid element, extract the indices of the *solid* quadrature points
     // that are in that fluid element
-    std::map<libMesh::dof_id_type,std::map<libMesh::dof_id_type,std::vector<unsigned int> > >::const_iterator
-      solid_elem_map_it = _fluid_solid_overlap->solid_map().find(solid_context.get_elem().id());
+//    std::map<libMesh::dof_id_type,std::map<libMesh::dof_id_type,std::vector<unsigned int> > >::const_iterator
+//      solid_elem_map_it = _fluid_solid_overlap->solid_map().find(solid_context.get_elem().id());
 
     // We should've had at least one overlapping fluid element
-    libmesh_assert( solid_elem_map_it != _fluid_solid_overlap->solid_map().end() );
+//    libmesh_assert( solid_elem_map_it != _fluid_solid_overlap->solid_map().end() );
 
-    const std::map<libMesh::dof_id_type,std::vector<unsigned int> > &
-      fluid_elem_map = solid_elem_map_it->second;
+//    const std::map<libMesh::dof_id_type,std::vector<unsigned int> > &
+//      fluid_elem_map = solid_elem_map_it->second;
 
     for( std::map<libMesh::dof_id_type,std::vector<unsigned int> >::const_iterator
            fluid_elem_map_it = fluid_elem_map.begin();
@@ -690,23 +766,23 @@ namespace GRINS
         for( unsigned int i = 0; i < solid_qpoint_indices.size(); i++ )
           solid_qpoints_subset.push_back( (solid_context.get_element_fe(_disp_vars.u(),2)->get_xyz())[ solid_qpoint_indices[i] ]);
 
-        _fluid_context->pre_fe_reinit(system,fluid_elem);
-        _fluid_context->elem_fe_reinit(&solid_qpoints_subset);
+        fluid_context->pre_fe_reinit(system,fluid_elem);
+        fluid_context->elem_fe_reinit(&solid_qpoints_subset);
 
-        unsigned int n_fluid_dofs = _fluid_context->get_dof_indices(this->_flow_vars.u()).size();
+        unsigned int n_fluid_dofs = fluid_context->get_dof_indices(this->_flow_vars.u()).size();
 
         velocity_dof_indices.clear();
         velocity_dof_indices.resize(_flow_vars.dim()*n_fluid_dofs);
 
         std::vector<libMesh::dof_id_type>::iterator vdof_start = velocity_dof_indices.begin();
         const std::vector<libMesh::dof_id_type>& u_dof_indices =
-          _fluid_context->get_dof_indices(this->_flow_vars.u());
+          fluid_context->get_dof_indices(this->_flow_vars.u());
 
         for( unsigned int i = 0; i < u_dof_indices.size(); i++ )
           velocity_dof_indices[i] = u_dof_indices[i];
 
         const std::vector<libMesh::dof_id_type>& v_dof_indices =
-          _fluid_context->get_dof_indices(this->_flow_vars.u());
+          fluid_context->get_dof_indices(this->_flow_vars.u());
 
         for( unsigned int i = 0; i < v_dof_indices.size(); i++ )
           velocity_dof_indices[i+n_fluid_dofs] = v_dof_indices[i];
@@ -719,23 +795,23 @@ namespace GRINS
 
         std::vector<libMesh::dof_id_type>::iterator sdof_start = solid_dof_indices.begin();
         const std::vector<libMesh::dof_id_type>& us_dof_indices =
-          solid_context.get_dof_indices(u_var);
+          solid_context.get_dof_indices(us_var);
 
         for( unsigned int i = 0; i < us_dof_indices.size(); i++ )
           solid_dof_indices[i] = us_dof_indices[i];
 
         const std::vector<libMesh::dof_id_type>& vs_dof_indices =
-          solid_context.get_dof_indices(v_var);
+          solid_context.get_dof_indices(vs_var);
 
         for( unsigned int i = 0; i < vs_dof_indices.size(); i++ )
           solid_dof_indices[i+n_solid_dofs] = vs_dof_indices[i];
 
-        libMesh::DenseSubVector<libMesh::Number> & Fu = _fluid_context->get_elem_residual(this->_flow_vars.u());
-        libMesh::DenseSubVector<libMesh::Number> & Fv = _fluid_context->get_elem_residual(this->_flow_vars.v());
-        libMesh::DenseSubVector<libMesh::Number> * Fw = NULL;
+        libMesh::DenseSubVector<libMesh::Number> & Fuf = fluid_context->get_elem_residual(this->_flow_vars.u());
+        libMesh::DenseSubVector<libMesh::Number> & Fvf = fluid_context->get_elem_residual(this->_flow_vars.v());
+        libMesh::DenseSubVector<libMesh::Number> * Fwf = NULL;
 
         if( _flow_vars.dim() == 3 )
-          Fw = &_fluid_context->get_elem_residual(this->_flow_vars.w());
+          Fwf = &fluid_context->get_elem_residual(this->_flow_vars.w());
  
         if( compute_jacobian)
           {
@@ -813,11 +889,11 @@ namespace GRINS
                 // Zero index for fluid dphi/JxW since we only requested one quad. point.
                 for( unsigned int alpha = 0; alpha < this->_disp_vars.dim(); alpha++ )
                   {
-                    Fu(i) -= tau(alpha,0)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
-                    Fv(i) -= tau(alpha,1)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
+                    Fuf(i) -= tau(alpha,0)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
+                    Fvf(i) -= tau(alpha,1)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
 
                     if (this->_flow_vars.dim() == 3)
-                      (*Fw)(i) -= tau(alpha,2)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
+                      (*Fwf)(i) -= tau(alpha,2)*fluid_dphi[i][qp](alpha)*solid_JxW[solid_qpoint_indices[qp]];
                   }
 
                 if( compute_jacobian )
@@ -887,11 +963,11 @@ namespace GRINS
           }
 
         system.get_dof_map().constrain_element_vector
-          ( _fluid_context->get_elem_residual(),
-            _fluid_context->get_dof_indices(), false );
+          ( fluid_context->get_elem_residual(),
+            fluid_context->get_dof_indices(), false );
 
-        system.rhs->add_vector( _fluid_context->get_elem_residual(),
-                                _fluid_context->get_dof_indices() );
+        system.rhs->add_vector( fluid_context->get_elem_residual(),
+                                fluid_context->get_dof_indices() );
 
       } // end loop over overlapping fluid elements
   }

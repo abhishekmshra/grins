@@ -101,9 +101,9 @@ namespace GRINS
 
   template<typename StressStrainLaw> inline
   void ElasticMembrane<StressStrainLaw>::get_grad_uvw(const AssemblyContext& context, unsigned int qp,
-                                                            libMesh::Gradient &gradu,
-                                                            libMesh::Gradient &gradv,
-                                                            libMesh::Gradient &gradw)
+                                                            libMesh::Gradient & grad_u,
+                                                            libMesh::Gradient & grad_v,
+                                                            libMesh::Gradient & grad_w)
   { 
     const unsigned int n_u_dofs = context.get_dof_indices(this->_disp_vars.u()).size();
     
@@ -112,17 +112,30 @@ namespace GRINS
     const std::vector<std::vector<libMesh::Real> >& dphi_deta = this->get_fe(context)->get_dphideta();
     
     const libMesh::DenseSubVector<libMesh::Number>& u_coeffs = context.get_elem_solution( this->_disp_vars.u() );
-    const libMesh::DenseSubVector<libMesh::Number>& v_coeffs = context.get_elem_solution( this->_disp_vars.v() );
-    const libMesh::DenseSubVector<libMesh::Number>& w_coeffs = context.get_elem_solution( this->_disp_vars.w() );
+    const libMesh::DenseSubVector<libMesh::Number>* v_coeffs = NULL;
+    const libMesh::DenseSubVector<libMesh::Number>* w_coeffs = NULL;
 
-    // Compute gradients  w.r.t. master element coordinates
-    for( unsigned int d = 0; d < n_u_dofs; d++ )
-      {
-        libMesh::RealGradient u_gradphi( dphi_dxi[d][qp], dphi_deta[d][qp] );
-        gradu += u_coeffs(d)*u_gradphi;
-        gradv += v_coeffs(d)*u_gradphi;
-        gradw += w_coeffs(d)*u_gradphi;
-      }
+    if( this->_disp_vars.dim() >= 2 )
+      v_coeffs = &context.get_elem_solution( this->_disp_vars.v() );
+
+    if( this->_disp_vars.dim() == 3 )
+      w_coeffs = &context.get_elem_solution( this->_disp_vars.w() );
+
+     // Compute gradients  w.r.t. master element coordinates
+     for( int d = 0; d < n_u_dofs; d++ )
+       {
+         libMesh::RealGradient u_gradphi( dphi_dxi[d][qp] );
+         grad_u += u_coeffs(d)*u_gradphi;
+
+         if( this->_disp_vars.dim() >= 2 )
+           grad_v += (*v_coeffs)(d)*u_gradphi;
+
+         if( this->_disp_vars.dim() == 3 )
+           grad_w += (*w_coeffs)(d)*u_gradphi;
+       }
+
+
+
   }
 
   template<typename StressStrainLaw> inline

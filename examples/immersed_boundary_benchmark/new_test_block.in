@@ -1,0 +1,185 @@
+#Input file for the immersed boundary benchmark example
+
+[ExampleOptions]
+   mag = '5.0e-6'
+[]
+
+[SolverOptions]
+   [./TimeStepping]
+      solver_type = 'libmesh_euler_solver'
+      theta='1.0'
+      delta_t = '0.001'
+      n_timesteps = '1'
+   [../]
+[]
+
+# Mesh related options
+[Mesh]
+  [./Read]
+    filename = 'new_test_block.e'
+  [../]
+[]
+
+#[restart-options]
+#  restart_file = 'restart.xdr'
+#[]
+
+# Options related to all Physics
+[Physics]
+  enabled_physics = 'Stokes
+                     ImmersedBoundary'
+
+  [./Stokes]
+    enabled_subdomains = '1'
+    material = 'Fluid'
+    #ic_ids = '1'
+    #ic_types = 'parsed'
+    #ic_variables = 'Vx'
+    #ic_values = '(${ExampleOptions/mag}*(1.5-y)*(y-0.5))*(y<=1.5)*(y>=0.5)+(y>=-1.5)*(y<=-0.5)*(${ExampleOptions/mag}*(-1.5-y)*(y+0.5))'
+  [../]
+
+  [./ImmersedBoundary]
+    enabled_subdomains = '1 2'
+    solid_mechanics = 'ElasticMembrane'
+    fluid_mechanics = 'Stokes'
+
+    # Initial Conditions
+    ic_ids = '2'
+    ic_types = 'parsed'
+    ic_variables = 'Ux'
+    ic_values = '{1.0e-6*(x+2)}'
+  [../]
+
+  [./ElasticMembrane]
+    enabled_subdomains = '2'
+    material = 'Membrane'
+  [../]
+
+[]
+
+# Properties related to the fluid and solid parameters
+[Materials]
+  [./Membrane]
+    [./MembraneThickness]
+      value = '0.05'
+    [../]
+    [./Density]
+      value = '1.0'
+    [../]
+    [./StressStrainLaw]
+      model = 'hookes_law'
+      [./HookesLaw]
+        E = '10'  # Youngs modulus
+        nu = '0.3'   # Poisson's ratio
+      [../]
+    [../]
+  [../]
+  [./Fluid]
+    [./Density]
+      value = '1.0'
+    [../]
+    [./Viscosity]
+      model = 'constant'
+      value = '1'
+    [../]
+  [../]
+[]
+
+# Options for chosen Variables
+[Variables]
+  [./Displacement]
+      names = 'Ux Uy'
+      fe_family = 'LAGRANGE'
+      order = 'FIRST'
+      enabled_subdomains = '2'
+  [../]
+  [./Velocity]
+      names = 'Vx Vy'
+      fe_family = 'LAGRANGE'
+      order = 'SECOND'
+      enabled_subdomains = '1'
+  [../]
+  [./Pressure]
+      names = 'p'
+      fe_family = 'LAGRANGE'
+      order = 'FIRST'
+      enabled_subdomains = '1'
+  [../]
+[]
+
+[Strategies]
+   [./Assembly]
+      extra_quadrature_order = '0'
+   [../]
+[]
+
+[BoundaryConditions]
+
+   bc_ids = '1 2 3 4 5 6'
+   bc_id_name_map = 'Inflow Walls Outflow Membrane SideContactWall BottomContactWall'
+
+   [./Inflow]
+      [./Velocity]
+         type = 'parsed_dirichlet'
+         Vx = '${ExampleOptions/mag}*(1.5-y)*(y-0.5)'
+         Vy = '0.0'
+      [../]
+   [../]
+   [./Walls]
+      [./Velocity]
+         type = 'no_slip'
+      [../]
+   [../]
+   [./Outflow]
+      [./Velocity]
+         type = 'homogeneous_neumann'
+      [../]
+   [../]
+   [./Membrane]
+      [./Displacement]
+        type = 'homogeneous_neumann'
+      [../]
+   [../]
+   [./SideContactWall]
+      [./Displacement]
+        type = 'pinned'
+      [../]
+   [../]
+   [./BottomContactWall]
+      [./Displacement]
+        type = 'roller_x'
+      [../]
+   [../]
+[]
+
+# Visualization options #
+[vis-options]
+output_vis = 'true'
+vis_output_file_prefix = 'new_test_block_out'
+output_residual = 'false'
+output_format = 'ExodusII'
+[]
+
+# Options for print info to the screen
+[screen-options]
+print_equation_system_info = 'true'
+print_mesh_info = 'true'
+print_log_info = 'true'
+solver_verbose = 'true'
+solver_quiet = 'false'
+echo_physics = 'true'
+#print_element_solutions = 'true'
+#print_element_residuals = 'true'
+#print_element_jacobians = 'true'
+#print_residuals = 'true'
+#print_jacobians = 'true'
+#print_solutions = 'true'
+[]
+
+# Options related to the solver
+[linear-nonlinear-solver]
+   max_nonlinear_iterations = '30'
+   use_numerical_jacobians_only = 'false'
+   continue_after_max_iterations = 'true'
+   continue_after_backtrack_failure = 'true'
+[]

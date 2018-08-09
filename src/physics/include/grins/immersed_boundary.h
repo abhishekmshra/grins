@@ -4,7 +4,6 @@
 // GRINS - General Reacting Incompressible Navier-Stokes
 //
 // Copyright (C) 2014-2017 Paul T. Bauman, Roy H. Stogner
-// Copyright (C) 2014-2016 Paul T. Bauman, Roy H. Stogner
 // Copyright (C) 2010-2013 The PECOS Development Team
 //
 // This library is free software; you can redistribute it and/or
@@ -70,8 +69,8 @@ namespace GRINS
     virtual void init_context( AssemblyContext& context );
 
     //! Residual contributions from the solid in the flow
-    virtual void element_time_derivative( bool compute_jacobian, AssemblyContext& context,
-                                          CachedValues& cache );
+    virtual void element_time_derivative( bool compute_jacobian,
+					  AssemblyContext& context ) override;
 
     //! Cache mesh information needed for residual computation
     virtual void preassembly( MultiphysicsSystem & system );
@@ -116,8 +115,8 @@ namespace GRINS
 
     libMesh::UniquePtr<ImmersedBoundaryAugmentedSparsity> _ibm_sparsity;
 
-    libMesh::UniquePtr<libMesh::FEMContext> _solid_context;
-    libMesh::UniquePtr<libMesh::FEMContext> _fluid_context;
+    //libMesh::UniquePtr<libMesh::FEMContext> _solid_context;
+    libMesh::UniquePtr<libMesh::FEMContext> fluid_context;
 
     //! Residual contributions to the fluid
     void element_time_derivative_fluid(AssemblyContext& context);
