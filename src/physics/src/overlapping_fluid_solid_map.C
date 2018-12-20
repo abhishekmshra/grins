@@ -61,8 +61,8 @@ namespace GRINS
     const libMesh::MeshBase & mesh = system.get_mesh();
 
     libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
-    libMesh::UniquePtr<libMesh::FEMContext>
-      fem_context( libMesh::cast_ptr<libMesh::FEMContext *>(raw_context.release()) );
+    libMesh::UniquePtr<AssemblyContext>
+      fem_context( libMesh::cast_ptr<AssemblyContext*>(raw_context.release()) );
 
     if( !mesh.is_serial() )
       libmesh_error_msg("ERROR: build_maps currently only implemented for ReplicatedMesh!");
