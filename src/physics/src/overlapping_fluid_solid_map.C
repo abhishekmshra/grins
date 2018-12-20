@@ -58,14 +58,14 @@ namespace GRINS
     const libMesh::MeshBase & mesh = system.get_mesh();
 
     libMesh::UniquePtr<libMesh::DiffContext> raw_context = system.build_context();
-    libMesh::UniquePtr<libMesh::FEMContext> fem_context( libMesh::cast_ptr<libMesh::FEMContext *>(raw_context.release()) );
+    libMesh::UniquePtr<AssemblyContext> fem_context( libMesh::cast_ptr<AssemblyContext*>(raw_context.release()) );
 
     if( !mesh.is_serial() )
       libmesh_error_msg("ERROR: build_maps currently only implemented for ReplicatedMesh!");
 
     for( std::set<libMesh::subdomain_id_type>::const_iterator solid_id_it = solid_ids.begin();
          solid_id_it != solid_ids.end(); ++solid_id_it )
-      for( libMesh::MeshBase::const_element_iterator e = mesh.active_subdomain_elements_begin(*solid_id_it);
+      for( libMesh::MeshBase::const_element_iterator e = mesh.active_local_subdomain_elements_begin(*solid_id_it);
            e != mesh.active_local_subdomain_elements_end(*solid_id_it);
            ++e )
         {
