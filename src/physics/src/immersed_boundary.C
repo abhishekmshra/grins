@@ -503,6 +503,13 @@ namespace GRINS
     solid_context.interior_gradient(this->_disp_vars.u(), sqp, grad_u);
     solid_context.interior_gradient(this->_disp_vars.v(), sqp, grad_v);
 
+    libMesh::Gradient grad_lambda_x, grad_lambda_y;
+    solid_context.interior_gradient(this->_lambda_var.u(), sqp, grad_lambda_x);
+    solid_context.interior_gradient(this->_lambda_var.v(), sqp, grad_lambda_y);
+
+    libMesh::TensorValue<libMesh::Real> F;
+    this->eval_deform_gradient(grad_u,grad_v,F);
+    
     libMesh::TensorValue<libMesh::Real> P;
     this->eval_first_Piola(grad_u,grad_v,P);
 
@@ -518,6 +525,9 @@ namespace GRINS
     const std::vector<std::vector<libMesh::Real> > fluid_phi =
       fluid_context.get_element_fe(this->_flow_vars.u())->get_phi();
 
+    const std::vector<std::vector<libMesh::RealGradient> > fluid_dphi =
+      fluid_context.get_element_fe(this->_flow_vars.u())->get_dphi();
+
     const std::vector<std::vector<libMesh::Real> > solid_phi =
       solid_context.get_element_fe(this->_disp_vars.u(),2)->get_phi();
 
@@ -532,16 +542,17 @@ namespace GRINS
 
     libMesh::Real jac = solid_JxW[sqp];
 
+    libMesh::TensorValue<libMesh::Real> fdphi_times_F;
+
     // Fluid residual
     for (unsigned int i=0; i != n_fluid_dofs; i++)
       {
 	libmesh_assert_equal_to( fluid_phi[i].size(), 1 );
-
+	
         // L2 Norm
 	Fuf(i) -= lambda_x*fluid_phi[i][0]*jac;
 	Fvf(i) -= lambda_y*fluid_phi[i][0]*jac;
-
-        /*
+	        
 	//Computing fdphi_times_F
 	for( unsigned int alpha = 0; alpha < this->_disp_vars.dim(); alpha++ )
 	  {
@@ -551,16 +562,15 @@ namespace GRINS
 		fdphi_times_F(1,alpha) += fluid_dphi[i][0](beta)*F(beta,alpha);
 	      }
    	  }
-	*/
+	
 	// Zero index for fluid dphi/JxW since we only requested one quad. point.
-	/*
+	
 	// H1 Norm
 	for( unsigned int alpha = 0; alpha < this->_disp_vars.dim(); alpha++ )
 	  {
 	    Fuf(i) -= (grad_lambda_x(alpha)*fdphi_times_F(0,alpha))*jac;
 	    Fvf(i) -= (grad_lambda_y(alpha)*fdphi_times_F(1,alpha))*jac;
 	  }
-	*/
       }
 
     // Solid residual
@@ -574,6 +584,12 @@ namespace GRINS
 	  {
 	    Fus(i) -= P(0,alpha)*solid_dphi[i][sqp](alpha)*jac;
 	    Fvs(i) -= P(1,alpha)*solid_dphi[i][sqp](alpha)*jac;
+	  }
+	//H1 Norm
+	for( unsigned int alpha = 0; alpha < this->_disp_vars.dim(); alpha++ )
+	  {
+	    Fus(i) += grad_lambda_x(alpha)*solid_dphi[i][sqp](alpha)*jac;
+	    Fvs(i) += grad_lambda_y(alpha)*solid_dphi[i][sqp](alpha)*jac;
 	  }
       }
 
