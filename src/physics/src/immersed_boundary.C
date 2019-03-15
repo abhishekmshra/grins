@@ -550,7 +550,7 @@ namespace GRINS
     const std::vector<std::vector<libMesh::Real> > lambda_phi =
       solid_context.get_element_fe(this->_lambda_var.u(),2)->get_phi();
 
-    const std::vector<std::vector<libMesh::RealGradient> > & lambda_dphi =
+    const std::vector<std::vector<libMesh::RealGradient> > lambda_dphi =
       solid_context.get_element_fe(this->_lambda_var.u(),2)->get_dphi();
 
     const std::vector<libMesh::Real> & solid_JxW =
@@ -559,6 +559,24 @@ namespace GRINS
     libMesh::Real jac = solid_JxW[sqp];
 
     libMesh::TensorValue<libMesh::Real> fdphi_times_F;
+
+    //Test interior_rate_gradient
+
+    libMesh::DenseSubVector<libMesh::Number> ucoef = solid_context.get_elem_solution_rate(this->_disp_vars.u());
+    libMesh::DenseSubVector<libMesh::Number> vcoef = solid_context.get_elem_solution_rate(this->_disp_vars.v());
+
+    libMesh::Gradient dudot, dvdot;
+    dudot=0;
+    dvdot=0;
+
+    for (unsigned int l=0; l != n_solid_dofs; l++)
+      {
+	dudot.add_scaled(solid_dphi[l][sqp], ucoef(l));
+	dvdot.add_scaled(solid_dphi[l][sqp], vcoef(l));
+      }
+
+    libmesh_assert_equal_to( dudot, grad_udot );
+    libmesh_assert_equal_to( dvdot, grad_vdot );
 
     // Fluid residual
     for (unsigned int i=0; i != n_fluid_dofs; i++)
