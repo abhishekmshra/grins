@@ -3126,23 +3126,15 @@ namespace GRINS
 
     // Fluid-lambda
     // Only "diagonally" coupled
-    this->diagonally_coupled_vars(flow_vars,lambda_vars,coupling_matrix);
+    this->fully_coupled_vars(flow_vars,lambda_vars,coupling_matrix);
 
     // Fluid-solid
     // "Fully" coupled
     this->fully_coupled_vars(flow_vars,disp_vars,coupling_matrix);
 
-    // Solid-lambda
-    // Only "diagonally" coupled
-    this->diagonally_coupled_vars(disp_vars,lambda_vars,coupling_matrix);
-
     // lambda-fluid
     // Only "diagonally" coupled
-    this->diagonally_coupled_vars(lambda_vars,flow_vars,coupling_matrix);
-
-    // lambda-solid
-    // "Fully" coupled
-    this->fully_coupled_vars(lambda_vars,disp_vars,coupling_matrix);
+    this->fully_coupled_vars(lambda_vars,flow_vars,coupling_matrix);
   }
 
   template<typename SolidMech>
