@@ -158,6 +158,9 @@ namespace GRINS
     //! Initialize context for added physics variables
     virtual void init_context( AssemblyContext& context );
 
+    //! Perform  any necessary setup before solve begins.
+    virtual void presolve( MultiphysicsSystem & /*system*/ ){};
+
     //! Perform any necessary setup before element assembly begins
     virtual void preassembly( MultiphysicsSystem & /*system*/ ){};
 
