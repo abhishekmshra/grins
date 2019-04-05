@@ -149,7 +149,6 @@ libgrins_la_SOURCES += physics/src/variable_pinning.C
 libgrins_la_SOURCES += physics/src/physics_factory_initializer.C
 libgrins_la_SOURCES += physics/src/immersed_boundary.C
 libgrins_la_SOURCES += physics/src/immersed_boundary_coupling_functor.C
-libgrins_la_SOURCES += physics/src/immersed_boundary_augmented_sparsity.C
 libgrins_la_SOURCES += physics/src/overlapping_fluid_solid_map.C
 
 # src/properties files
@@ -462,7 +461,6 @@ include_HEADERS += physics/include/grins/variable_pinning.h
 include_HEADERS += physics/include/grins/physics_factory_initializer.h
 include_HEADERS += physics/include/grins/immersed_boundary.h
 include_HEADERS += physics/include/grins/immersed_boundary_coupling_functor.h
-include_HEADERS += physics/include/grins/immersed_boundary_augmented_sparsity.h
 include_HEADERS += physics/include/grins/overlapping_fluid_solid_map.h
 
 # src/properties headers
