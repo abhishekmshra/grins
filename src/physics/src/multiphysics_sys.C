@@ -289,6 +289,12 @@ namespace GRINS
     FEMSystem::solve();
   }
 
+  void MultiphysicsSystem::preadvance_timestep()
+  {
+    for (auto & physics : _physics_list )
+      physics.second->preadvance_timestep(*this);
+  }
+
   bool MultiphysicsSystem::_general_residual( bool request_jacobian,
                                               libMesh::DiffContext& context,
                                               ResFuncType resfunc,
